@@ -50,7 +50,7 @@ use futures::{
     Future, FutureExt, TryFutureExt,
     future::{BoxFuture, join_all},
 };
-use kameo::{error::Infallible, prelude::*};
+use kameo::{error::Infallible, prelude::*, reply::Response};
 
 enum Factory<A: Actor> {
     Sync(Box<dyn FnMut() -> ActorRef<A> + Send + Sync + 'static>),
@@ -251,7 +251,10 @@ where
     A: Actor + Message<M>,
     M: Send + 'static,
 {
-    type Reply = Result<<A::Reply as Reply>::Ok, SendError<M, <A::Reply as Reply>::Error>>;
+    type Reply = Result<
+        <<A::Reply as Reply>::Resp as Response>::Ok,
+        SendError<M, <<A::Reply as Reply>::Resp as Response>::Error>,
+    >;
 
     async fn handle(
         &mut self,
@@ -275,19 +278,32 @@ where
     /// The message was forwarded to a worker.
     Forwarded,
     /// The message failed to be sent to a worker.
-    Err(SendError<M, <A::Reply as Reply>::Error>),
+    Err(SendError<M, <<A::Reply as Reply>::Resp as Response>::Error>),
 }
 
+impl<A, M> Response for WorkerReply<A, M>
+where
+    A: Actor + Message<M>,
+    M: Send + 'static,
+{
+    type Ok = <<A::Reply as Reply>::Resp as Response>::Ok;
+    type Error = <<A::Reply as Reply>::Resp as Response>::Error;
+}
 impl<A, M> Reply for WorkerReply<A, M>
 where
     A: Actor + Message<M>,
     M: Send + 'static,
 {
-    type Ok = <A::Reply as Reply>::Ok;
-    type Error = <A::Reply as Reply>::Error;
-    type Value = Result<Self::Ok, SendError<M, Self::Error>>;
+    type Resp = Self;
+    type Value =
+        Result<<Self::Resp as Response>::Ok, SendError<M, <Self::Resp as Response>::Error>>;
 
-    fn to_result(self) -> Result<<A::Reply as Reply>::Ok, <A::Reply as Reply>::Error> {
+    fn to_result(
+        self,
+    ) -> Result<
+        <<A::Reply as Reply>::Resp as Response>::Ok,
+        <<A::Reply as Reply>::Resp as Response>::Error,
+    > {
         unimplemented!("a WorkerReply cannot be converted to a result and is only a marker type")
     }
 
@@ -376,7 +392,7 @@ where
     A: Actor + Message<M>,
     M: Clone + Send + 'static,
 {
-    type Reply = Vec<Result<(), SendError<M, <A::Reply as Reply>::Error>>>;
+    type Reply = Vec<Result<(), SendError<M, <<A::Reply as Reply>::Resp as Response>::Error>>>;
 
     async fn handle(
         &mut self,
