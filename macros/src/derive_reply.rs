@@ -16,13 +16,17 @@ impl ToTokens for DeriveReply {
 
         tokens.extend(quote! {
             #[automatically_derived]
-            impl #impl_generics ::kameo::Reply for #ident #ty_generics #where_clause {
+            impl #impl_generics ::kameo::Response for #ident #ty_generics #where_clause {
                 type Ok = Self;
                 type Error = ::kameo::error::Infallible;
+            }
+            #[automatically_derived]
+            impl #impl_generics ::kameo::Reply for #ident #ty_generics #where_clause {
+                type Resp = Self;
                 type Value = Self;
 
                 #[inline]
-                fn to_result(self) -> ::std::result::Result<Self::Ok, Self::Error> {
+                fn to_result(self) -> ::std::result::Result<<Self::Resp as ::kameo::Response>::Ok, <Self::Resp as ::kameo::Response>::Error> {
                     ::std::result::Result::Ok(self)
                 }
 

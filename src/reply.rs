@@ -62,10 +62,21 @@ use crate::{
 /// This is reserved for advanced use cases, and misuse of this can result in panics.
 pub type BoxReplySender = oneshot::Sender<Result<BoxReply, BoxSendError>>;
 
-/// A reply value.
+/// A response value
 ///
 /// If an Err is returned by a handler, and is unhandled by the caller (ie, the message was sent asynchronously with `tell`),
 /// then the error is treated as a panic in the actor.
+///
+/// This is implemented for all std lib types, and can be implemented on custom types manually or with the derive
+/// macro.
+pub trait Response: Send + 'static {
+    /// The success type in the reply.
+    type Ok: Send + 'static;
+    /// The error type in the reply.
+    type Error: ReplyError;
+}
+
+/// A reply value.
 ///
 /// This is implemented for all std lib types, and can be implemented on custom types manually or with the derive
 /// macro.
@@ -79,17 +90,15 @@ pub type BoxReplySender = oneshot::Sender<Result<BoxReply, BoxSendError>>;
 /// pub struct Foo { }
 /// ```
 pub trait Reply: Send + 'static {
-    /// The success type in the reply.
-    type Ok: Send + 'static;
-    /// The error type in the reply.
-    type Error: ReplyError;
+    /// The type received by caller
+    type Resp: Response;
     /// The type sent back to the receiver.
     ///
     /// In almost all cases this will be `Self`. The only exception is the `DelegatedReply` type.
     type Value: Reply;
 
     /// Converts a reply to a `Result`.
-    fn to_result(self) -> Result<Self::Ok, Self::Error>;
+    fn to_result(self) -> Result<<Self::Resp as Response>::Ok, <Self::Resp as Response>::Error>;
 
     /// Converts the reply into a `Box<any::Any + Send>` if it's an Err, otherwise `None`.
     fn into_any_err(self) -> Option<Box<dyn ReplyError>>;
@@ -100,12 +109,14 @@ pub trait Reply: Send + 'static {
     fn into_value(self) -> Self::Value;
 
     /// Downcasts a `Box<dyn Any>` into the `Self::Ok` type.
-    fn downcast_ok(ok: Box<dyn any::Any>) -> Self::Ok {
+    fn downcast_ok(ok: Box<dyn any::Any>) -> <Self::Resp as Response>::Ok {
         *ok.downcast().unwrap()
     }
 
     /// Downcasts a `Box<dyn Any>` into a `Self::Error` type.
-    fn downcast_err<M: 'static>(err: BoxSendError) -> SendError<M, Self::Error> {
+    fn downcast_err<M: 'static>(
+        err: BoxSendError,
+    ) -> SendError<M, <Self::Resp as Response>::Error> {
         err.downcast()
     }
 }
@@ -221,15 +232,21 @@ impl<R> DelegatedReply<R> {
     }
 }
 
+impl<R> Response for DelegatedReply<R>
+where
+    R: Response,
+{
+    type Ok = R::Ok;
+    type Error = R::Error;
+}
 impl<R> Reply for DelegatedReply<R>
 where
     R: Reply,
 {
-    type Ok = R::Ok;
-    type Error = R::Error;
+    type Resp = R::Resp;
     type Value = R::Value;
 
-    fn to_result(self) -> Result<Self::Ok, Self::Error> {
+    fn to_result(self) -> Result<<Self::Resp as Response>::Ok, <Self::Resp as Response>::Error> {
         unimplemented!("a DeligatedReply cannot be converted to a result and is only a marker type")
     }
 
@@ -248,28 +265,35 @@ pub struct ForwardedReply<M, R>
 where
     R: Reply,
 {
-    res: Result<(), SendError<M, R::Error>>,
+    res: Result<(), SendError<M, <R::Resp as Response>::Error>>,
 }
 
 impl<M, R> ForwardedReply<M, R>
 where
     R: Reply,
 {
-    pub(crate) fn new(res: Result<(), SendError<M, R::Error>>) -> Self {
+    pub(crate) fn new(res: Result<(), SendError<M, <R::Resp as Response>::Error>>) -> Self {
         ForwardedReply { res }
     }
 }
 
+impl<M, R> Response for ForwardedReply<M, R>
+where
+    R: Reply,
+    M: Send + 'static,
+{
+    type Ok = <R::Resp as Response>::Ok;
+    type Error = SendError<M, <R::Resp as Response>::Error>;
+}
 impl<M, R> Reply for ForwardedReply<M, R>
 where
     R: Reply,
     M: Send + 'static,
 {
-    type Ok = R::Ok;
-    type Error = SendError<M, R::Error>;
-    type Value = Result<Self::Ok, Self::Error>;
+    type Resp = Self;
+    type Value = Result<<Self::Resp as Response>::Ok, <Self::Resp as Response>::Error>;
 
-    fn to_result(self) -> Result<Self::Ok, Self::Error> {
+    fn to_result(self) -> Result<<Self::Resp as Response>::Ok, <Self::Resp as Response>::Error> {
         self.res
             .map(|_| unreachable!("forwarded reply is only converted to a result if its an error"))
     }
@@ -288,23 +312,35 @@ where
 
     /// If the forwarded reply succeeded, the we can safely assume
     /// the `Box<dyn Any>` we have here is the ok value of the inner `R`.
-    fn downcast_ok(ok: Box<dyn any::Any>) -> Self::Ok {
+    fn downcast_ok(ok: Box<dyn any::Any>) -> <Self::Resp as Response>::Ok {
         *ok.downcast().unwrap()
     }
 
     /// The error is either from the inner `R`, or our outer `SendError`.
     /// We'll try both.
-    fn downcast_err<N: 'static>(err: BoxSendError) -> SendError<N, Self::Error> {
-        err.try_downcast::<N, R::Error>()
+    fn downcast_err<N: 'static>(
+        err: BoxSendError,
+    ) -> SendError<N, <Self::Resp as Response>::Error> {
+        err.try_downcast::<N, <R::Resp as Response>::Error>()
             .map(|err| err.map_err(SendError::HandlerError))
             .unwrap_or_else(|err| {
-                err.downcast::<M, SendError<M, R::Error>>().map_msg(|_| {
-                    unreachable!(
-                        "forwarded reply is only an error if it failed to forward the message"
-                    )
-                })
+                err.downcast::<M, SendError<M, <R::Resp as Response>::Error>>()
+                    .map_msg(|_| {
+                        unreachable!(
+                            "forwarded reply is only an error if it failed to forward the message"
+                        )
+                    })
             })
     }
+}
+
+impl<T, E> Response for Result<T, E>
+where
+    T: Send + 'static,
+    E: ReplyError,
+{
+    type Ok = T;
+    type Error = E;
 }
 
 impl<T, E> Reply for Result<T, E>
@@ -312,8 +348,7 @@ where
     T: Send + 'static,
     E: ReplyError,
 {
-    type Ok = T;
-    type Error = E;
+    type Resp = Self;
     type Value = Self;
 
     fn to_result(self) -> Result<T, E> {
@@ -355,9 +390,12 @@ macro_rules! impl_infallible_reply {
          } )?
         $ty:ty
     ) => {
-        impl $( < $($generics)* > )? Reply for $ty {
+        impl $( < $($generics)* > )? Response for $ty {
             type Ok = Self;
             type Error = $crate::error::Infallible;
+        }
+        impl $( < $($generics)* > )? Reply for $ty {
+            type Resp = Self;
             type Value = Self;
 
             fn to_result(self) -> Result<Self, $crate::error::Infallible> {

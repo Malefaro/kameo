@@ -26,7 +26,7 @@ use crate::{
     error::{self, PanicError, SendError},
     mailbox::{MailboxSender, Signal, SignalMailbox, WeakMailboxSender},
     message::{Message, StreamMessage},
-    reply::ReplyError,
+    reply::Response,
     request::{
         AskRequest, RecipientTellRequest, ReplyRecipientAskRequest, ReplyRecipientTellRequest,
         TellRequest, WithoutRequestTimeout,
@@ -179,9 +179,8 @@ where
     /// original actor reference, but with a more focused API.
     ///
     /// If you don't need ask requests and need more flexible API see [ActorRef::recipient]
-    pub fn reply_recipient<M>(
-        self,
-    ) -> ReplyRecipient<M, <A::Reply as Reply>::Ok, <A::Reply as Reply>::Error>
+    // pub fn reply_recipient<M>(self) -> ReplyRecipient<M, <<A as Message<M>>::Reply as Reply>::Value>
+    pub fn reply_recipient<M>(self) -> ReplyRecipient<M, <A::Reply as Reply>::Resp>
     where
         A: Message<M>,
         M: Send + 'static,
@@ -909,14 +908,14 @@ impl<A: Actor> fmt::Debug for ActorRef<A> {
 /// A type erased actor ref, accepting only a single message type.
 ///
 /// This is returned by [ActorRef::reply_recipient].
-pub struct ReplyRecipient<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> {
-    pub(crate) handler: Box<dyn ReplyMessageHandler<M, OK, ERR>>,
+pub struct ReplyRecipient<M: Send + 'static, R: Response> {
+    pub(crate) handler: Box<dyn ReplyMessageHandler<M, R>>,
 }
 
-impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> ReplyRecipient<M, OK, ERR> {
+impl<M: Send + 'static, R: Response> ReplyRecipient<M, R> {
     fn new<A, AR>(actor_ref: ActorRef<A>) -> Self
     where
-        AR: Reply<Ok = OK, Error = ERR>,
+        AR: Reply<Resp = R>,
         A: Actor + Message<M, Reply = AR>,
     {
         ReplyRecipient {
@@ -949,7 +948,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> ReplyRecipient<M, O
     /// the actor is stopped.
     #[must_use = "Downgrade creates a WeakReplyRecipient without destroying the original non-weak recipient."]
     #[inline]
-    pub fn downgrade(&self) -> WeakReplyRecipient<M, OK, ERR> {
+    pub fn downgrade(&self) -> WeakReplyRecipient<M, R> {
         self.handler.reply_downgrade()
     }
 
@@ -1009,7 +1008,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> ReplyRecipient<M, O
     ///
     /// See [`ActorRef::tell`].
     #[track_caller]
-    pub fn tell(&self, msg: M) -> ReplyRecipientTellRequest<'_, M, OK, ERR, WithoutRequestTimeout> {
+    pub fn tell(&self, msg: M) -> ReplyRecipientTellRequest<'_, M, R, WithoutRequestTimeout> {
         ReplyRecipientTellRequest::new(
             self,
             msg,
@@ -1022,7 +1021,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> ReplyRecipient<M, O
     ///
     /// See [`ActorRef::ask`].
     #[track_caller]
-    pub fn ask(&self, msg: M) -> ReplyRecipientAskRequest<'_, M, OK, ERR, WithoutRequestTimeout> {
+    pub fn ask(&self, msg: M) -> ReplyRecipientAskRequest<'_, M, R, WithoutRequestTimeout> {
         ReplyRecipientAskRequest::new(
             self,
             msg,
@@ -1032,7 +1031,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> ReplyRecipient<M, O
     }
 }
 
-impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> Clone for ReplyRecipient<M, OK, ERR> {
+impl<M: Send + 'static, R: Response> Clone for ReplyRecipient<M, R> {
     fn clone(&self) -> Self {
         ReplyRecipient {
             handler: dyn_clone::clone_box(&*self.handler),
@@ -1040,9 +1039,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> Clone for ReplyReci
     }
 }
 
-impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> fmt::Debug
-    for ReplyRecipient<M, OK, ERR>
-{
+impl<M: Send + 'static, R: Response> fmt::Debug for ReplyRecipient<M, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("ReplyRecipient");
         d.field("id", &self.handler.id());
@@ -1557,14 +1554,14 @@ impl<A: Actor> fmt::Debug for WeakRecipient<A> {
 }
 
 /// A weak recipient that does not prevent the actor from being stopped.
-pub struct WeakReplyRecipient<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> {
-    handler: Box<dyn WeakReplyMessageHandler<M, OK, ERR>>,
+pub struct WeakReplyRecipient<M: Send + 'static, R: Response> {
+    handler: Box<dyn WeakReplyMessageHandler<M, R>>,
 }
 
-impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> WeakReplyRecipient<M, OK, ERR> {
+impl<M: Send + 'static, R: Response> WeakReplyRecipient<M, R> {
     fn new<A, AR>(weak_actor_ref: WeakActorRef<A>) -> Self
     where
-        AR: Reply<Ok = OK, Error = ERR>,
+        AR: Reply<Resp = R>,
         A: Actor + Message<M, Reply = AR>,
     {
         WeakReplyRecipient {
@@ -1579,7 +1576,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> WeakReplyRecipient<
 
     /// Tries to convert a `WeakReplyRecipient` into a [`ReplyRecipient`]. This will return `Some`
     /// if there are other `ActorRef`/`ReplyRecipient` instances alive, otherwise `None` is returned.
-    pub fn upgrade(&self) -> Option<ReplyRecipient<M, OK, ERR>> {
+    pub fn upgrade(&self) -> Option<ReplyRecipient<M, R>> {
         self.handler.reply_upgrade()
     }
 
@@ -1594,7 +1591,7 @@ impl<M: Send + 'static, OK: Send + 'static, ERR: ReplyError> WeakReplyRecipient<
     }
 }
 
-impl<A: Actor, OK: Send + 'static, ERR: ReplyError> Clone for WeakReplyRecipient<A, OK, ERR> {
+impl<A: Actor, R: Response> Clone for WeakReplyRecipient<A, R> {
     fn clone(&self) -> Self {
         WeakReplyRecipient {
             handler: dyn_clone::clone_box(&*self.handler),
@@ -1602,7 +1599,7 @@ impl<A: Actor, OK: Send + 'static, ERR: ReplyError> Clone for WeakReplyRecipient
     }
 }
 
-impl<A: Actor, OK: Send + 'static, ERR: ReplyError> fmt::Debug for WeakReplyRecipient<A, OK, ERR> {
+impl<A: Actor, R: Response> fmt::Debug for WeakReplyRecipient<A, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("WeakReplyRecipient");
         d.field("id", &self.handler.id());
@@ -1738,7 +1735,7 @@ where
     }
 }
 
-pub(crate) trait ReplyMessageHandler<M: Send + 'static, OK: Send + 'static, ERR: ReplyError>:
+pub(crate) trait ReplyMessageHandler<M: Send + 'static, R: Response>:
     MessageHandler<M>
 {
     #[allow(clippy::type_complexity)]
@@ -1746,41 +1743,39 @@ pub(crate) trait ReplyMessageHandler<M: Send + 'static, OK: Send + 'static, ERR:
         &self,
         msg: M,
         mailbox_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<OK, SendError<M, ERR>>>;
-    fn try_ask(&self, msg: M) -> BoxFuture<'_, Result<OK, SendError<M, ERR>>>;
-    fn blocking_ask(&self, msg: M) -> Result<OK, SendError<M, ERR>>;
-
-    fn reply_downgrade(&self) -> WeakReplyRecipient<M, OK, ERR>;
+    ) -> BoxFuture<'_, Result<R::Ok, SendError<M, R::Error>>>;
+    #[allow(clippy::type_complexity)]
+    fn try_ask(&self, msg: M) -> BoxFuture<'_, Result<R::Ok, SendError<M, R::Error>>>;
+    fn blocking_ask(&self, msg: M) -> Result<R::Ok, SendError<M, R::Error>>;
+    fn reply_downgrade(&self) -> WeakReplyRecipient<M, R>;
 }
-
-impl<A, M, AR, OK, ERR> ReplyMessageHandler<M, OK, ERR> for ActorRef<A>
+impl<A, M, AR, R> ReplyMessageHandler<M, R> for ActorRef<A>
 where
-    AR: Reply<Ok = OK, Error = ERR>,
+    R: Response,
+    AR: Reply<Resp = R>,
     A: Actor + Message<M, Reply = AR>,
     M: Send + 'static,
-    OK: Send + 'static,
-    ERR: ReplyError,
 {
     #[allow(clippy::type_complexity)]
     fn ask(
         &self,
         msg: M,
         mailbox_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<OK, SendError<M, ERR>>> {
+    ) -> BoxFuture<'_, Result<R::Ok, SendError<M, R::Error>>> {
         self.ask(msg)
             .mailbox_timeout_opt(mailbox_timeout)
             .send()
             .boxed()
     }
-    fn try_ask(&self, msg: M) -> BoxFuture<'_, Result<OK, SendError<M, ERR>>> {
+    fn try_ask(&self, msg: M) -> BoxFuture<'_, Result<R::Ok, SendError<M, R::Error>>> {
         Box::pin(self.ask(msg).try_send())
     }
-    fn blocking_ask(&self, msg: M) -> Result<OK, SendError<M, ERR>> {
+    fn blocking_ask(&self, msg: M) -> Result<R::Ok, SendError<M, R::Error>> {
         self.ask(msg).blocking_send()
     }
 
     #[inline]
-    fn reply_downgrade(&self) -> WeakReplyRecipient<M, OK, ERR> {
+    fn reply_downgrade(&self) -> WeakReplyRecipient<M, R> {
         WeakReplyRecipient::new(self.downgrade())
     }
 }
@@ -1818,22 +1813,19 @@ where
     }
 }
 
-trait WeakReplyMessageHandler<M: Send + 'static, OK: Send + 'static, ERR: ReplyError>:
-    WeakMessageHandler<M>
-{
-    fn reply_upgrade(&self) -> Option<ReplyRecipient<M, OK, ERR>>;
+trait WeakReplyMessageHandler<M: Send + 'static, R: Response>: WeakMessageHandler<M> {
+    fn reply_upgrade(&self) -> Option<ReplyRecipient<M, R>>;
 }
 
-impl<A, M, AR, OK, ERR> WeakReplyMessageHandler<M, OK, ERR> for WeakActorRef<A>
+impl<A, M, AR, R> WeakReplyMessageHandler<M, R> for WeakActorRef<A>
 where
-    AR: Reply<Ok = OK, Error = ERR>,
+    R: Response,
+    AR: Reply<Resp = R>,
     A: Actor + Message<M, Reply = AR>,
     M: Send + 'static,
-    OK: Send + 'static,
-    ERR: ReplyError,
 {
     #[inline]
-    fn reply_upgrade(&self) -> Option<ReplyRecipient<M, OK, ERR>> {
+    fn reply_upgrade(&self) -> Option<ReplyRecipient<M, R>> {
         self.upgrade().map(ReplyRecipient::new)
     }
 }

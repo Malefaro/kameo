@@ -20,7 +20,7 @@ pub mod request;
 pub use actor::Actor;
 #[cfg(feature = "macros")]
 pub use kameo_macros::{messages, remote_message, Actor, RemoteActor, Reply};
-pub use reply::Reply;
+pub use reply::{Reply, Response};
 
 /// Commonly used types and functions that can be imported with a single use statement.
 ///
