@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     cell::Cell,
     collections::HashMap,
     fmt,
@@ -132,7 +133,7 @@ where
     pub fn lookup<Q>(name: &Q) -> Result<Option<Self>, error::RegistryError>
     where
         Q: std::hash::Hash + Eq + ?Sized,
-        std::borrow::Cow<'static, str>: std::borrow::Borrow<Q>,
+        std::borrow::Cow<'static, str>: Borrow<Q>,
     {
         crate::registry::ACTOR_REGISTRY.lock().unwrap().get(name)
     }
@@ -918,6 +919,12 @@ impl<A: Actor> Eq for ActorRef<A> {}
 impl<A: Actor> Hash for ActorRef<A> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+impl<A: Actor> Borrow<ActorID> for ActorRef<A> {
+    fn borrow(&self) -> &ActorID {
+        &self.id
     }
 }
 
