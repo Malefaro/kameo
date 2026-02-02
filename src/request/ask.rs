@@ -32,6 +32,8 @@ where
     msg: M,
     mailbox_timeout: Tm,
     reply_timeout: Tr,
+    #[cfg(feature = "tracing")]
+    span: Option<tracing::Span>,
     #[cfg(all(debug_assertions, feature = "tracing"))]
     called_at: &'static std::panic::Location<'static>,
 }
@@ -57,6 +59,8 @@ where
             msg,
             mailbox_timeout: Tm::default(),
             reply_timeout: Tr::default(),
+            #[cfg(feature = "tracing")]
+            span: None,
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at,
         }
@@ -79,6 +83,8 @@ where
             msg: self.msg,
             mailbox_timeout: WithRequestTimeout(duration),
             reply_timeout: self.reply_timeout,
+            #[cfg(feature = "tracing")]
+            span: None,
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at: self.called_at,
         }
@@ -98,9 +104,24 @@ where
             msg: self.msg,
             mailbox_timeout: self.mailbox_timeout,
             reply_timeout: WithRequestTimeout(duration),
+            #[cfg(feature = "tracing")]
+            span: None,
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at: self.called_at,
         }
+    }
+
+    #[cfg(feature = "tracing")]
+    /// Sets provided span to message that will instrument corresponding [Message::handle]
+    pub fn with_span(mut self, span: tracing::Span) -> Self {
+        self.span = Some(span);
+        self
+    }
+
+    #[cfg(feature = "tracing")]
+    /// Sets current span to message that will instrument corresponding [Message::handle]
+    pub fn with_current_span(self) -> Self {
+        self.with_span(tracing::Span::current())
     }
 
     /// Sends the message.
@@ -124,6 +145,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -187,6 +210,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -236,6 +261,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(sender.boxed()),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -272,6 +299,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(sender.boxed()),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -299,6 +328,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -355,6 +386,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -392,6 +425,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -417,6 +452,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(sender.boxed()),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -468,6 +505,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: Some(reply),
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -576,7 +615,7 @@ where
 /// A request to send a message to a typed actor with reply.
 #[allow(missing_debug_implementations)]
 #[must_use = "request won't be sent without awaiting, or calling a send method"]
-pub struct ReplyRecipientAskRequest<'a, M, Ok, Err, Tm>
+pub struct ReplyRecipientAskRequest<'a, M, Ok, Err, Tm, Tr>
 where
     M: Send + 'static,
     Ok: Send + 'static,
@@ -585,11 +624,12 @@ where
     actor_ref: &'a ReplyRecipient<M, Ok, Err>,
     msg: M,
     mailbox_timeout: Tm,
+    reply_timeout: Tr,
     #[cfg(all(debug_assertions, feature = "tracing"))]
     called_at: &'static std::panic::Location<'static>,
 }
 
-impl<'a, M, Ok, Err, Tm> ReplyRecipientAskRequest<'a, M, Ok, Err, Tm>
+impl<'a, M, Ok, Err, Tm, Tr> ReplyRecipientAskRequest<'a, M, Ok, Err, Tm, Tr>
 where
     M: Send + 'static,
     Ok: Send + 'static,
@@ -604,11 +644,13 @@ where
     ) -> Self
     where
         Tm: Default,
+        Tr: Default,
     {
         ReplyRecipientAskRequest {
             actor_ref,
             msg,
             mailbox_timeout: Tm::default(),
+            reply_timeout: Tr::default(),
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at,
         }
@@ -618,18 +660,41 @@ where
     pub fn mailbox_timeout(
         self,
         duration: Duration,
-    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, WithRequestTimeout> {
+    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, WithRequestTimeout, Tr> {
         self.mailbox_timeout_opt(Some(duration))
     }
 
     pub(crate) fn mailbox_timeout_opt(
         self,
         duration: Option<Duration>,
-    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, WithRequestTimeout> {
+    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, WithRequestTimeout, Tr> {
         ReplyRecipientAskRequest {
             actor_ref: self.actor_ref,
             msg: self.msg,
             mailbox_timeout: WithRequestTimeout(duration),
+            reply_timeout: self.reply_timeout,
+            #[cfg(all(debug_assertions, feature = "tracing"))]
+            called_at: self.called_at,
+        }
+    }
+
+    /// Sets the timeout for waiting for a reply from the actor.
+    pub fn reply_timeout(
+        self,
+        duration: Duration,
+    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, Tm, WithRequestTimeout> {
+        self.reply_timeout_opt(Some(duration))
+    }
+
+    pub(crate) fn reply_timeout_opt(
+        self,
+        duration: Option<Duration>,
+    ) -> ReplyRecipientAskRequest<'a, M, Ok, Err, Tm, WithRequestTimeout> {
+        ReplyRecipientAskRequest {
+            actor_ref: self.actor_ref,
+            msg: self.msg,
+            mailbox_timeout: self.mailbox_timeout,
+            reply_timeout: WithRequestTimeout(duration),
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at: self.called_at,
         }
@@ -639,45 +704,67 @@ where
     pub async fn send(self) -> Result<Ok, SendError<M, Err>>
     where
         Tm: Into<Option<Duration>>,
+        Tr: Into<Option<Duration>>,
     {
         self.actor_ref
             .handler
-            .ask(self.msg, self.mailbox_timeout.into())
+            .ask(
+                self.msg,
+                self.mailbox_timeout.into(),
+                self.reply_timeout.into(),
+            )
             .await
     }
 }
 
-impl<M, Ok, Err> ReplyRecipientAskRequest<'_, M, Ok, Err, WithoutRequestTimeout>
+impl<M, Ok, Err, Tr> ReplyRecipientAskRequest<'_, M, Ok, Err, WithoutRequestTimeout, Tr>
 where
     M: Send + 'static,
     Ok: Send + 'static,
     Err: ReplyError,
 {
     /// Tries to send the message without waiting for mailbox capacity.
-    pub async fn try_send(self) -> Result<Ok, SendError<M, Err>> {
-        self.actor_ref.handler.try_ask(self.msg).await
+    pub async fn try_send(self) -> Result<Ok, SendError<M, Err>>
+    where
+        Tr: Into<Option<Duration>>,
+    {
+        self.actor_ref
+            .handler
+            .try_ask(self.msg, self.reply_timeout.into())
+            .await
     }
+}
 
+impl<M, Ok, Err>
+    ReplyRecipientAskRequest<'_, M, Ok, Err, WithoutRequestTimeout, WithoutRequestTimeout>
+where
+    M: Send + 'static,
+    Ok: Send + 'static,
+    Err: ReplyError,
+{
     /// Sends the message in a blocking context.
     pub fn blocking_send(self) -> Result<Ok, SendError<M, Err>> {
         self.actor_ref.handler.blocking_ask(self.msg)
     }
 }
 
-impl<'a, M, Ok, Err, Tm> IntoFuture for ReplyRecipientAskRequest<'a, M, Ok, Err, Tm>
+impl<'a, M, Ok, Err, Tm, Tr> IntoFuture for ReplyRecipientAskRequest<'a, M, Ok, Err, Tm, Tr>
 where
     M: Send + 'static,
     Ok: Send + 'static,
     Err: ReplyError,
     Tm: Into<Option<Duration>> + Send + 'static,
+    Tr: Into<Option<Duration>> + Send + 'static,
 {
     type Output = Result<Ok, SendError<M, Err>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        self.actor_ref
-            .handler
-            .ask(self.msg, self.mailbox_timeout.into())
+        self.actor_ref.handler.ask(
+            self.msg,
+            self.mailbox_timeout.into(),
+            self.reply_timeout.into(),
+        )
     }
 }
 

@@ -300,9 +300,18 @@ where
                 actor_ref,
                 reply,
                 sent_within_actor,
+                #[cfg(feature = "tracing")]
+                span,
             }) => {
                 if let ControlFlow::Break(reason) = state
-                    .handle_message(message, actor_ref, reply, sent_within_actor)
+                    .handle_message(
+                        message,
+                        actor_ref,
+                        reply,
+                        sent_within_actor,
+                        #[cfg(feature = "tracing")]
+                        span,
+                    )
                     .await
                 {
                     return reason;

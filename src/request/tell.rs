@@ -28,6 +28,8 @@ where
     mailbox_timeout: Tm,
     #[cfg(all(debug_assertions, feature = "tracing"))]
     called_at: &'static std::panic::Location<'static>,
+    #[cfg(feature = "tracing")]
+    span: Option<tracing::Span>,
 }
 
 impl<'a, A, M, Tm> TellRequest<'a, A, M, Tm>
@@ -51,6 +53,8 @@ where
             mailbox_timeout: Tm::default(),
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at,
+            #[cfg(feature = "tracing")]
+            span: None,
         }
     }
 
@@ -69,7 +73,22 @@ where
             mailbox_timeout: WithRequestTimeout(duration),
             #[cfg(all(debug_assertions, feature = "tracing"))]
             called_at: self.called_at,
+            #[cfg(feature = "tracing")]
+            span: None,
         }
+    }
+
+    #[cfg(feature = "tracing")]
+    /// Sets provided span to message that will instrument corresponding [Message::handle]
+    pub fn with_span(mut self, span: tracing::Span) -> Self {
+        self.span = Some(span);
+        self
+    }
+
+    #[cfg(feature = "tracing")]
+    /// Sets current span to message that will instrument corresponding [Message::handle]
+    pub fn with_current_span(self) -> Self {
+        self.with_span(tracing::Span::current())
     }
 
     /// Sends the message.
@@ -82,6 +101,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: None,
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
@@ -113,6 +134,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: None,
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         Ok(self.actor_ref.mailbox_sender().try_send(signal)?)
@@ -125,6 +148,8 @@ where
             actor_ref: self.actor_ref.clone(),
             reply: None,
             sent_within_actor: self.actor_ref.is_current(),
+            #[cfg(feature = "tracing")]
+            span: self.span,
         };
 
         let tx = self.actor_ref.mailbox_sender();
